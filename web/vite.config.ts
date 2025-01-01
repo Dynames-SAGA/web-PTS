@@ -2,6 +2,8 @@ import { UserConfig, ConfigEnv } from 'vite';
 import { createVitePlugins } from './build/vite/plugins';
 import { resolve } from 'path';
 import { VITE_PORT } from './build/constant';
+import { defineConfig } from 'vite';
+
 
 function pathResolve(dir: string) {
   return resolve(process.cwd(), '.', dir);
@@ -48,6 +50,7 @@ export default ({ command }: ConfigEnv): UserConfig => {
       host: '0.0.0.0', // IP配置，支持从IP启动
       https: false, // 禁用https
       // proxy,
+
     },
   };
 };

@@ -1,22 +1,22 @@
 <template>
   <div class="content-list">
     <div class="list-title">My Tutors</div>
-    <div role="tablist" class="list-tabs-view flex-view">
-    </div>
+    <div role="tablist" class="list-tabs-view flex-view"></div>
     <div class="list-content">
       <div class="collect-thing-view">
         <div class="thing-list flex-view">
-          <div class="thing-item item-column-3" v-for="(item,index) in wishData" :key="index">
+          <div class="thing-item item-column-3" v-for="(item, index) in wishData" :key="index">
             <div class="remove" @click="handleRemove(item)">Remove</div>
             <div class="img-view" @click="handleClickItem(item)">
               <img :src="item.cover" alt="Item Cover">
             </div>
             <div class="info-view">
-              <h3 class="thing-name">{{item.title}}</h3>
-              <p class="authors" v-if="item.author">{{item.author}} (Author)</p>
-              <p class="translators" v-if="item.translator">{{item.translator}} (Translator)</p>
+              <h3 class="thing-name">{{ item.title }}</h3>
+              <p class="authors" v-if="item.author">{{ item.author }} (Author)</p>
+              <p class="translators" v-if="item.translator">{{ item.translator }} (Translator)</p>
               <div class="action-buttons">
-                <button class="pay-button">Pay</button>
+                <!-- 打开二维码弹窗 -->
+                <button class="pay-button" @click="openQrcodeModal(item)">Generate QR Code</button>
                 <button class="chat-button" @click="openChat(item)">Chat</button>
               </div>
             </div>
@@ -24,6 +24,14 @@
         </div>
       </div>
     </div>
+
+    <!-- 二维码弹窗 -->
+    <el-dialog v-model="qrcodeVisible" title="Payment QR Code" width="300px" :before-close="closeQrcodeModal">
+      <div id="qrcode-container" style="text-align: center;"></div>
+      <p v-if="paymentStatus === 'non-payment'" style="color: orange; text-align: center;">User has scanned the QR code but not paid yet.</p>
+      <p v-if="paymentStatus === 'yes-payment'" style="color: green; text-align: center;">Payment completed successfully!</p>
+    </el-dialog>
+
     <!-- 聊天窗口 -->
     <el-dialog v-model="chatVisible" title="Chat" width="400px" :before-close="handleCloseChat">
       <div class="chat-window">
@@ -44,35 +52,123 @@
       </div>
     </el-dialog>
 
-
-
-
-
   </div>
 </template>
-
 <script setup>
-import {message} from 'ant-design-vue';
-import {userWishListApi, unWishApi} from '/@/api/thingWish'
-import {BASE_URL} from "/@/store/constants";
-import {useUserStore} from "/@/store";
+import { ref, onMounted, onBeforeUnmount } from 'vue';
+import $ from 'jquery'; // 确保安装了 jQuery
+import 'jquery-qrcode'; // 确保安装了 jquery-qrcode
+import { message } from 'ant-design-vue';
+import { userWishListApi, unWishApi } from '/@/api/thingWish';
+import { BASE_URL } from "/@/store/constants";
+import { useUserStore } from "/@/store";
 
 const router = useRouter();
-const route = useRoute();
 const userStore = useUserStore();
+
+const wishData = ref([]);
+
 
 // 聊天窗口相关状态
 const chatVisible = ref(false); // 控制聊天窗口显示/隐藏
 const chatMessages = ref([]); // 聊天消息列表
 const newMessage = ref(''); // 当前输入的消息
 
+// 二维码相关状态
+const qrcodeVisible = ref(false); // 控制二维码弹窗显示/隐藏
+const currentItem = ref(null); // 当前选中的条目（用于生成二维码）
+const outTradeNo = ref(null); // 商户订单编号
+const paymentStatus = ref(null); // 支付状态（non-payment, yes-payment）
+
+let tradeInterval = null; // 定时任务句柄
+let findNumber = true; // 记录是否通知页面“用户已扫码”
+
+// 获取愿望列表
+const getWishThingList = () => {
+  const userId = userStore.user_id;
+  userWishListApi({ userId }).then(res => {
+    res.data.forEach(item => {
+      item.cover = BASE_URL + '/api/staticfiles/image/' + item.cover;
+    });
+    wishData.value = res.data;
+  }).catch(err => {
+    console.error(err.msg);
+  });
+};
+
+// 打开二维码弹窗并生成二维码
+const openQrcodeModal = (item) => {
+  currentItem.value = item;
+  qrcodeVisible.value = true;
+
+  // 模拟请求二维码数据
+  $.ajax({
+    url: `http://localhost:8080/api/AlipayFaceToFaceController/ZFBPreorderAction`,
+    method: 'POST',
+    dataType: 'JSON',
+    success: function (res) {
+      outTradeNo.value = res.outTradeNo; // 保存订单编号
+      paymentStatus.value = null; // 重置支付状态
+      createQrcode(res.qrcode); // 调用生成二维码方法
+      startFindZFBTrade(); // 启动定时任务
+    },
+    error: function () {
+      message.error('Failed to generate QR code.');
+    },
+  });
+};
+
+// 生成二维码
+const createQrcode = (url) => {
+  $('#qrcode-container').empty(); // 清空之前的二维码
+  $('#qrcode-container').qrcode({
+    width: 150,
+    height: 150,
+    text: url,
+  });
+};
+
+// 开始定时查询交易状态
+const startFindZFBTrade = () => {
+  tradeInterval = setInterval(function () {
+    console.log("Checking transaction status...");
+    $.ajax({
+      url: `http://localhost:8080/api/AlipayFaceToFaceController/findZFB_tradeAction`,
+      method: 'POST',
+      data: {
+        outTradeNo: outTradeNo.value,
+      },
+      dataType: 'JSON',
+      success: function (res) {
+        if (res.code === '10000' && res.data === 'non-payment') {
+          // 用户扫码未支付
+          if (findNumber) {
+            console.log("User has scanned the QR code but not paid.");
+            paymentStatus.value = 'non-payment';
+            findNumber = false;
+          }
+        } else if (res.code === '10000' && res.data === 'yes-payment') {
+          // 用户已支付
+          clearInterval(tradeInterval); // 停止定时任务
+          paymentStatus.value = 'yes-payment';
+          message.success('Payment completed successfully!');
+        }
+      },
+    });
+  }, 3000); // 每 3 秒查询一次
+};
+
+// 关闭二维码弹窗
+const closeQrcodeModal = () => {
+  qrcodeVisible.value = false;
+  clearInterval(tradeInterval); // 停止查询任务
+  findNumber = true; // 重置扫码标志
+};
+
 // 打开聊天窗口
 const openChat = (item) => {
   chatVisible.value = true;
-  // 这里可以根据 item 初始化聊天记录
-  chatMessages.value = [
-    { sender: 'Tutor', text: 'Hello! How can I help you?' },
-  ];
+  chatMessages.value = [{ sender: 'Tutor', text: 'Hello! How can I help you?' }];
 };
 
 // 发送消息
@@ -86,41 +182,36 @@ const sendMessage = () => {
 // 关闭聊天窗口
 const handleCloseChat = () => {
   chatVisible.value = false;
-  chatMessages.value = []; // 清空聊天记录
+  chatMessages.value = [];
 };
 
-let wishData = ref([])
+// 点击条目，跳转详情页
+const handleClickItem = (record) => {
+  const text = router.resolve({ name: 'detail', query: { id: record.thing_id } });
+  window.open(text.href, '_blank');
+};
 
-onMounted(()=>{
-  getWishThingList()
-})
-
-const handleClickItem =(record)=> {
-  let text = router.resolve({name: 'detail', query: {id: record.thing_id}})
-  window.open(text.href, '_blank')
-}
-
-const handleRemove =(record)=> {
-  unWishApi({id:record.id}).then(res => {
-    message.success('Removed successfully')
-    getWishThingList()
+// 移除条目
+const handleRemove = (record) => {
+  unWishApi({ id: record.id }).then(() => {
+    message.success('Removed successfully');
+    getWishThingList();
   }).catch(err => {
-    console.log(err)
-  })
-}
+    console.error(err);
+  });
+};
 
-const getWishThingList =()=> {
-  let userId = userStore.user_id
-  userWishListApi({userId: userId}).then(res => {
-    res.data.forEach(item => {
-      item.cover = BASE_URL + '/api/staticfiles/image/' + item.cover
-    })
-    wishData.value = res.data
-  }).catch(err => {
-    console.log(err.msg)
-  })
-}
+// 获取愿望列表
+onMounted(() => {
+  getWishThingList();
+});
+
+// 清理定时任务（防止内存泄漏）
+onBeforeUnmount(() => {
+  clearInterval(tradeInterval);
+});
 </script>
+
 
 <style scoped lang="less">
 .flex-view {
