@@ -41,7 +41,6 @@
                   <span>Contact</span>
                 </button>
               </div>
-
             </div>
             <div class="thing-counts hidden-sm">
               <div class="count-item flex-view pointer" @click="addToWish()">
@@ -61,6 +60,8 @@
                 <div class="count-img">
                   <img :src="RecommendIcon">
                 </div>
+                <div ref="alipayWap" v-html="alipay" />
+
                 <div class="count-box flex-view">
                   <div class="count-text-box">
                     <span class="count-title">Favorites</span>
